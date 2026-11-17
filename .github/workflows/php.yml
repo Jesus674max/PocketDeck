@@ -1,0 +1,57 @@
+name: Build PHP 7.0 ARM64
+on: workflow_dispatch
+jobs:
+  php:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Escribir script
+        run: |
+          cat > build.sh <<'EOS'
+          set -ex
+          apk add --no-cache build-base autoconf automake libtool bison re2c pkgconf \
+            wget tar xz linux-headers zlib-dev zlib-static perl
+          mkdir -p /opt/deps /src && cd /src
+          # libyaml
+          wget -q https://pyyaml.org/download/libyaml/yaml-0.2.5.tar.gz
+          tar xf yaml-0.2.5.tar.gz && cd yaml-0.2.5
+          ./configure --prefix=/opt/deps --disable-shared --enable-static
+          make -j4 && make install && cd /src
+          # curl sin SSL
+          wget -q https://curl.se/download/curl-7.88.1.tar.xz
+          tar xf curl-7.88.1.tar.xz && cd curl-7.88.1
+          ./configure --prefix=/opt/deps --disable-shared --enable-static --without-ssl \
+            --without-libpsl --without-brotli --without-zstd --without-nghttp2 \
+            --without-libidn2 --disable-ldap --disable-ldaps --disable-manual
+          make -j4 && make install && cd /src
+          # PHP + pthreads + yaml
+          wget -q https://museum.php.net/php7/php-7.0.33.tar.gz
+          tar xf php-7.0.33.tar.gz
+          wget -q -O pthreads.tgz https://github.com/krakjoe/pthreads/archive/refs/tags/v3.1.6.tar.gz
+          mkdir php-7.0.33/ext/pthreads && tar xf pthreads.tgz -C php-7.0.33/ext/pthreads --strip-components=1
+          wget -q -O yaml.tgz https://pecl.php.net/get/yaml-2.0.4.tgz
+          mkdir php-7.0.33/ext/yaml && tar xf yaml.tgz -C php-7.0.33/ext/yaml --strip-components=1
+          cd php-7.0.33
+          ./buildconf --force
+          export PKG_CONFIG_PATH=/opt/deps/lib/pkgconfig
+          ./configure --prefix=/opt/php7 --disable-all --enable-cli \
+            --enable-maintainer-zts --enable-pthreads --enable-sockets \
+            --with-zlib --enable-json --enable-ctype --enable-hash --enable-phar \
+            --enable-mbstring --disable-mbregex --enable-bcmath --with-sqlite3 \
+            --enable-posix --enable-tokenizer --enable-filter --enable-session \
+            --with-curl=/opt/deps --with-yaml=/opt/deps \
+            LIBS="-lcurl -lz"
+          make -j4 EXTRA_LDFLAGS_PROGRAM="-all-static"
+          mkdir -p /out && cp sapi/cli/php /out/php
+          strip /out/php
+          file /out/php || true
+          /out/php -v
+          /out/php -m
+          EOS
+      - name: Compilar en Alpine arm64
+        run: |
+          mkdir -p out
+          docker run --rm -v $PWD:/w -v $PWD/out:/out alpine:3.12 sh -c "apk add --no-cache file && sh /w/build.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: php7-aarch64
+          path: out/php
